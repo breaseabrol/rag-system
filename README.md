@@ -140,8 +140,8 @@ The harness runs a committed QA eval set (`eval_dataset.jsonl` — real question
 
 ## ✅ Current Status & Roadmap
 
-- [ ] `db/models.py` + `docker-compose.yml` — Postgres+pgvector running locally
-- [ ] Manual single-document ingestion confirmed end to end
+- [X] `db/models.py` + `docker-compose.yml` — Postgres+pgvector running locally
+- [X] Manual single-document ingestion confirmed end to end
 - [ ] Bare-bones query endpoint working (curl, no frontend)
 - [ ] Claude generation wired in with citations
 - [ ] Eval set built + first real eval numbers produced
@@ -150,8 +150,6 @@ The harness runs a committed QA eval set (`eval_dataset.jsonl` — real question
 - [ ] Observability layer + eval dashboard
 - [ ] Chunking/embedding comparison results published in this README
 - [ ] CI workflows live, deployed publicly
-
-*(Check off what's actually done — this list is more credible half-checked and honest than fully checked and wrong.)*
 
 ## 👤 Author
 
