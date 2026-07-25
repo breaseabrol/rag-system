@@ -2,6 +2,7 @@ import re
 import requests
 from bs4 import BeautifulSoup
 from dataclasses import dataclass
+from urllib.parse import urljoin
 
 
 @dataclass
@@ -93,3 +94,43 @@ def parse_page(url: str, html: str) -> LoadedDocument:
 def load_doc(url: str) -> LoadedDocument:
     html = fetch_page(url)
     return parse_page(url, html)
+
+def get_all_doc_urls(sections=("sql-", "functions-", "queries-", "performance-", "indexes-")) -> list[str]:
+    toc_url = "https://www.postgresql.org/docs/16/index.html"
+
+    html = fetch_page(toc_url)
+    soup = BeautifulSoup(html, "html.parser")
+
+    # Step 1: find the chapter "hub" pages by their link text, not their href —
+    # index.html names them descriptively (e.g. "Functions and Operators"),
+    # not with the sql-/functions- prefix used by their child leaf pages.
+    hub_keywords = ["functions and operators", "queries", "indexes", "performance tips", "reference", "sql commands"]
+    hub_urls = set()
+    for a in soup.find_all("a", href=True):
+        link_text = a.get_text(strip=True).lower()
+        href = a["href"].split("#")[0]
+        if href.endswith(".html") and any(k in link_text for k in hub_keywords):
+            full_url = urljoin(toc_url, href)
+            if "/docs/16/" in full_url:
+                hub_urls.add(full_url)
+
+    # Step 2: crawl each hub page for the real leaf URLs
+    urls = set()
+    for hub_url in hub_urls:
+        sub_html = fetch_page(hub_url)
+        sub_soup = BeautifulSoup(sub_html, "html.parser")
+        for a in sub_soup.find_all("a", href=True):
+            href = a["href"].split("#")[0]
+            if not href.endswith(".html"):
+                continue
+            full_url = urljoin(hub_url, href)
+            # exclude version-switcher links (e.g. /docs/10/..., /docs/17/...) —
+            # every doc page links to itself across all PostgreSQL versions
+            if "/docs/16/" not in full_url:
+                continue
+            if any(s in full_url for s in sections):
+                urls.add(full_url)
+
+    urls |= {u for u in hub_urls if any(s in u for s in sections)}
+
+    return sorted(urls)
