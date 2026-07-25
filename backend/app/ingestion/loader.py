@@ -16,7 +16,7 @@ class LoadedDocument:
 def fetch_page(url: str) -> str:
     resp = requests.get(url, timeout=10)
     resp.raise_for_status()
-    return resp.text
+    return resp.text, resp.url
 
 
 def clean_text(text: str) -> str:
@@ -92,8 +92,8 @@ def parse_page(url: str, html: str) -> LoadedDocument:
 
 
 def load_doc(url: str) -> LoadedDocument:
-    html = fetch_page(url)
-    return parse_page(url, html)
+    html, resolved_url = fetch_page(url)
+    return parse_page(resolved_url, html)
 
 def get_all_doc_urls(sections=("sql-", "functions-", "queries-", "performance-", "indexes-")) -> list[str]:
     toc_url = "https://www.postgresql.org/docs/16/index.html"
@@ -117,15 +117,13 @@ def get_all_doc_urls(sections=("sql-", "functions-", "queries-", "performance-",
     # Step 2: crawl each hub page for the real leaf URLs
     urls = set()
     for hub_url in hub_urls:
-        sub_html = fetch_page(hub_url)
+        sub_html, resolved_hub_url = fetch_page(hub_url)
         sub_soup = BeautifulSoup(sub_html, "html.parser")
         for a in sub_soup.find_all("a", href=True):
             href = a["href"].split("#")[0]
             if not href.endswith(".html"):
                 continue
-            full_url = urljoin(hub_url, href)
-            # exclude version-switcher links (e.g. /docs/10/..., /docs/17/...) —
-            # every doc page links to itself across all PostgreSQL versions
+            full_url = urljoin(resolved_hub_url, href)
             if "/docs/16/" not in full_url:
                 continue
             if any(s in full_url for s in sections):
