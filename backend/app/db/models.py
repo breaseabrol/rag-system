@@ -1,3 +1,4 @@
+import enum
 from sqlalchemy import Column, Integer, String, Text, ForeignKey, JSON, Index, Computed
 from sqlalchemy.dialects.postgresql import TSVECTOR
 from sqlalchemy.orm import declarative_base, relationship
@@ -10,7 +11,7 @@ class Document(Base):
     id = Column(Integer, primary_key=True)
     url = Column(String, nullable=False, unique=True)
     title = Column(String)
-    raw_tedxt = Column(JSON)
+    raw_text = Column(JSON)
 
     chunks = relationship("Chunk", back_populates="document")
 
@@ -43,3 +44,7 @@ class Chunk(Base):
             postgresql_ops={"embedding": "vector_cosine_ops"},
         ),
     )
+
+class IngestStatus(str, enum.Enum):
+    queued = "queued"
+    running = ""
