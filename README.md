@@ -1,63 +1,55 @@
-# RAG System with Eval Harness
+# Hybrid RAG Retrieval Backend
 
-A Retrieval-Augmented Generation system built around one core idea: **you can't improve what you can't measure.** Ingestion and query are separate services, the vector store and retrieval logic are swappable, and every change runs through an automated eval harness before it ships.
+A Retrieval-Augmented Generation backend built around one idea: **fuse lexical and semantic retrieval properly, run entirely locally, and keep the pipeline simple enough to actually finish and reason about end to end.**
 
 > **Status:** Active development (07/2026 – present). See [Current Status](#-current-status--roadmap) below for what's built vs. planned.
 
 ## 🎯 Why this architecture
 
-Most RAG demos couple everything into one script, which makes two things impossible: scaling ingestion independently of queries, and knowing whether a change (new chunking strategy, new embedding model, new prompt) actually made retrieval better or worse. Three decisions drive this system:
+Earlier iterations of this project targeted a fully decoupled, queue-driven, multi-service architecture (async ingestion workers, swappable external embedding APIs, CI-gated eval regression). That scope was deliberately cut back — not because those ideas are wrong, but because a synchronous, single-process backend gets to a genuinely working, explainable system faster, without carrying infrastructure that isn't earning its keep yet. Three decisions drive the current design:
 
-1. **Ingestion and query are separate services.** Ingestion is an async, queue-driven pipeline; query is a stateless, low-latency API. Coupling them is the fastest way for a RAG system to fall over under real load.
-2. **The vector store and eval harness are decoupled from application logic.** Chunking strategy and embedding model are swappable via config, not code changes — that's what makes "compare X vs Y" experiments possible to run cleanly.
-3. **Everything emits structured logs.** Latency, cost, and retrieved-chunk IDs are logged on every request, so quality and performance are observable, not assumed.
+1. **Hybrid retrieval, fused correctly.** BM25 (lexical) and pgvector ANN (semantic) search each surface results a single method would miss. They're combined via **Reciprocal Rank Fusion (RRF)** — rank-based, not a weighted sum of raw scores, since BM25 scores and cosine similarity live on incomparable scales.
+2. **Runs entirely locally.** Embeddings via `sentence-transformers`, generation via Ollama — no external API keys required to run this end to end.
+3. **Structure-aware ingestion.** The chunker treats code blocks and tables as atomic units rather than splitting them mid-block, which naive fixed-size chunking does by default.
 
 ## 🏗️ Architecture
 
 ```
-                                   ┌─────────────────┐
-                                   │   Frontend       │
-                                   │  (React + Vite)  │
-                                   └────────┬─────────┘
-                                            │ REST/SSE
-                                   ┌────────▼─────────┐
-                                   │   API Gateway     │
-                                   │  (FastAPI)        │
-                                   └──┬──────────────┬─┘
-                        ┌────────────▼───┐    ┌──────▼─────────┐
-                        │  Query Service   │    │ Ingestion       │
-                        │  (retrieval +    │    │ Service         │
-                        │   generation)    │    │ (async worker)  │
-                        └──┬────────────┬──┘    └──────┬──────────┘
-                           │            │               │
-                  ┌────────▼──┐   ┌─────▼─────┐   ┌─────▼──────┐
-                  │  Vector DB │   │ Claude API │   │  Doc Store  │
-                  │ (pgvector) │   │ (Anthropic)│   │ (S3/local)  │
-                  └────────────┘   └────────────┘   └─────────────┘
-                           │
-                  ┌────────▼──────────┐
-                  │  Eval Harness      │
-                  │  (offline, CI-run) │
-                  └────────────────────┘
-
-           Cross-cutting: structured logs → latency/cost metrics → dashboard
+                    Client (curl / Postman)
+                              │
+                     ┌────────▼────────┐
+                     │   FastAPI app    │
+                     │  (single process)│
+                     └───┬──────────┬──┘
+                          │          │
+                  POST /ingest   POST /query
+                  (sync)          │
+                     │            ├──────────────┬──────────────┐
+             loader → chunker     │              │              │
+                     │       BM25 index      pgvector ANN   Ollama
+                     │       (in-memory,      (HNSW index,  (local
+                     │       rank_bm25)       cosine dist)  generation)
+                     │            │              │
+                     │            └──── RRF ─────┘
+                     │                  │
+              PostgreSQL          fused chunk ranking
+           (Document, Chunk +          │
+            embedding column)     answer + citations
 ```
 
-**Why it scales the way it's designed to:** ingestion runs as a queue-driven worker, so it can scale horizontally independent of query traffic. The query service is stateless, so it can run behind multiple replicas. The vector DB and eval harness are both swappable without touching the API layer — the abstraction exists whether or not the system is ever actually deployed at that scale.
+**Why this shape works for now:** no queue, no worker process, no separate frontend — every request is a normal synchronous FastAPI call. That's a real tradeoff (ingesting a large document blocks the request until it's done), which is explicitly fine for a single-user, portfolio-scale corpus. The retrieval and generation logic underneath isn't a toy version of the idea — it's a real hybrid pipeline, just without the operational scaffolding a production deployment would need.
 
 ## 🛠️ Tech Stack
 
 | Layer | Choice | Why |
 |---|---|---|
-| Frontend | React + TypeScript + Vite | Fast to build, type discipline |
-| API | FastAPI (Python) | Async-native, plays well with LLM SDKs |
-| Vector DB | Postgres + pgvector | Real SQL + vector search together, not a toy store |
-| Embeddings | Voyage AI / OpenAI `text-embedding-3` (swappable) | Need ≥2 to run comparisons |
-| LLM | Claude (Anthropic API) | Strong for both generation and eval judging |
-| Eval | Custom harness + Ragas metrics | Ragas for standard metrics, custom code for control over what's reported |
-| Queue | Redis + RQ | Simple, well-understood async ingestion |
-| Observability | Structured JSON logs → Postgres → lightweight dashboard | A well-designed lightweight version proves the concept without the OpenTelemetry setup tax |
-| CI | GitHub Actions | Tests + eval regression check on every push |
+| API | FastAPI (Python) | Async-native, auto OpenAPI docs |
+| Vector DB | PostgreSQL + pgvector (HNSW index) | Real SQL + ANN vector search in one database |
+| Lexical search | `rank_bm25` (BM25Okapi) | In-memory, no extra service to run |
+| Fusion | Reciprocal Rank Fusion | Rank-based combination avoids mixing incomparable BM25/cosine score scales |
+| Embeddings | `sentence-transformers` (`all-MiniLM-L6-v2`) | Local, no API key, 384-dim, fast enough on CPU |
+| LLM | Ollama (local) | No external API dependency, no per-token cost while iterating |
+| Chunking | Custom recursive, structure-aware | Keeps code blocks/tables atomic instead of splitting them |
 
 ## 📂 Repository Structure
 
@@ -65,26 +57,35 @@ Most RAG demos couple everything into one script, which makes two things impossi
 rag-system/
 ├── backend/
 │   ├── app/
-│   │   ├── main.py                 # FastAPI entrypoint
-│   │   ├── config.py                # Env-driven settings (swap models/strategies here)
-│   │   ├── api/                     # routes_query, routes_ingest, routes_admin
-│   │   ├── core/                    # chunking, embeddings, retrieval, generation, reranker
-│   │   ├── db/                      # models, session, vector_store (pgvector)
-│   │   ├── ingestion/                # loader, worker, tasks (async pipeline)
-│   │   └── observability/            # logger, tracer, metrics
+│   │   ├── main.py                  # FastAPI entrypoint
+│   │   ├── config.py                # Env-driven settings (pydantic-settings)
+│   │   ├── api/
+│   │   │   ├── routes_query.py
+│   │   │   └── routes_ingest.py
+│   │   ├── core/
+│   │   │   ├── chunking.py          # Fixed-size + structure-aware recursive chunker
+│   │   │   ├── embeddings.py        # sentence-transformers wrapper
+│   │   │   ├── lexical_index.py     # In-memory BM25 index
+│   │   │   └── retrieval.py         # RRF fusion of BM25 + ANN
+│   │   ├── db/
+│   │   │   ├── models.py            # Document, Chunk (pgvector column, HNSW + GIN indexes)
+│   │   │   ├── session.py
+│   │   │   └── vector_store.py      # pgvector cosine ANN search
+│   │   ├── ingestion/
+│   │   │   └── loader.py            # HTML → clean text + segment tagging
+│   │   └── schemas/
+│   │       └── models.py            # Pydantic request/response models
 │   ├── eval/
-│   │   ├── build_eval_set.py         # constructs the QA eval set
-│   │   ├── run_eval.py               # runs full eval, computes Ragas metrics
-│   │   └── eval_dataset.jsonl        # committed eval set (question, ground-truth, source)
-│   ├── tests/                        # unit + integration tests, incl. eval regression test
-│   ├── scripts/                      # compare_chunking.py, compare_embeddings.py
+│   │   ├── build_eval_set.py
+│   │   ├── run_eval.py
+│   │   ├── metrics.py
+│   │   └── eval_dataset.jsonl
+│   ├── tests/
+│   ├── scripts/
+│   │   └── init_db.py
+│   ├── requirements.txt
 │   └── Dockerfile
-├── frontend/
-│   └── src/                          # ChatWindow, SourceCitations, UploadPanel, EvalDashboard
-├── .github/workflows/
-│   ├── ci.yml                        # lint + unit tests
-│   └── eval-regression.yml           # fails CI if eval metrics regress
-├── docker-compose.yml                 # Postgres+pgvector, Redis, API, worker — one command
+├── docker-compose.yml                 # Postgres+pgvector
 └── README.md
 ```
 
@@ -94,62 +95,56 @@ rag-system/
 git clone https://github.com/breaseabrol/rag-system.git
 cd rag-system
 
-# Spins up Postgres+pgvector, Redis, API, and worker together
-docker-compose up --build
+# Spin up Postgres + pgvector
+docker-compose up -d
+
+# Install dependencies
+cd backend
+pip install -r requirements.txt
+
+# Create tables
+python scripts/init_db.py
+
+# Run the API
+uvicorn app.main:app --reload
 ```
 
-*(Confirm exact env vars required — API keys for Voyage AI/OpenAI/Anthropic, DB URL — against `config.py` and add a `.env.example` if one doesn't exist yet.)*
+Requires [Ollama](https://ollama.ai) running locally with a model pulled (e.g. `ollama pull llama3.1`) for the generation step.
+
+*(`.env.example` to be added — confirm required vars against `config.py`.)*
 
 ### Running an evaluation
 
 ```bash
-python backend/eval/run_eval.py
-```
-
-### Comparing configurations
-
-```bash
-python backend/scripts/compare_chunking.py
-python backend/scripts/compare_embeddings.py
+python eval/run_eval.py
 ```
 
 ## 📊 Evaluation Methodology
 
-The harness runs a committed QA eval set (`eval_dataset.jsonl` — real questions paired with ground-truth answers and source documents) through the full retrieval + generation pipeline, and scores it on:
-
-| Metric | What it measures |
-|---|---|
-| Retrieval Precision/Recall@k | Whether the retriever surfaces the right chunks |
-| Faithfulness (Ragas) | Whether generated answers are grounded in retrieved context |
-| Answer Relevance (Ragas) | Whether the answer actually addresses the question |
-
-`eval-regression.yml` runs this on every push and fails CI if a change drops these metrics below threshold — a quality gate, not just a correctness gate.
-
-**Results:**
-
-| Configuration | Retrieval Recall | Faithfulness | Notes |
-|---|---|---|---|
-| *(fill in once `compare_chunking.py` / `compare_embeddings.py` have been run)* | | | |
+*(To be filled in once the eval harness is built — retrieval precision/recall@k and answer faithfulness against a committed QA set in `eval_dataset.jsonl`.)*
 
 ## ⚖️ Tradeoffs
 
-- **Postgres + pgvector over a managed vector DB** (Pinecone/Weaviate): keeps the stack to one database, avoids a second service to operate, at the cost of some retrieval-at-scale performance a purpose-built vector DB would offer.
-- **Redis + RQ over Celery/Kafka**: sufficient to prove async ingestion works and scales independently of query load, without the operational overhead a heavier queue would add for a project at this scale.
-- **What breaks at 10x scale**: *(fill in honestly once you've thought it through — this is one of the highest-signal sections in the whole README for an interviewer)*.
-- **What's deliberately not built**: no auth/multi-tenancy, no Kubernetes/service mesh — this project is scoped to prove architectural thinking, not to be production infrastructure.
+- **Synchronous ingestion, no queue**: simpler to build and reason about; means `/ingest` blocks until a document is fully processed. Fine for single-user, small-corpus use — would need an async worker if ingesting many large documents concurrently.
+- **RRF over weighted score fusion**: BM25 and cosine similarity scores aren't on comparable scales, so combining them by rank position avoids an arbitrary, hard-to-justify weighting scheme.
+- **Local models over hosted APIs**: no external cost or API key management while iterating, at the cost of generation/embedding quality relative to larger hosted models.
+- **What's deliberately not built (yet)**: no frontend, no async ingestion, no CI, no observability dashboard. These are staged for later — see roadmap below — not abandoned.
 
 ## ✅ Current Status & Roadmap
 
-- [X] `db/models.py` + `docker-compose.yml` — Postgres+pgvector running locally
-- [X] Manual single-document ingestion confirmed end to end
-- [ ] Bare-bones query endpoint working (curl, no frontend)
-- [ ] Claude generation wired in with citations
+- [X] `config.py` — env-driven settings
+- [X] `db/session.py` — connection pooling wired to config
+- [X] `core/embeddings.py` — sentence-transformers wrapper
+- [X] `core/lexical_index.py` — BM25 index
+- [X] `db/vector_store.py` — pgvector ANN search
+- [ ] `db/models.py` — fix outstanding typo, finalize schema
+- [ ] `ingestion/loader.py` — fix known bug in `get_all_doc_urls`
+- [ ] `core/retrieval.py` — wire RRF fusion end to end
+- [ ] Sync ingestion pipeline + `POST /ingest` working end to end
+- [ ] `core/generation.py` (Ollama) + `POST /query` working end to end
 - [ ] Eval set built + first real eval numbers produced
-- [ ] Async ingestion via worker + queue
-- [ ] Frontend: chat window → citations → upload panel
-- [ ] Observability layer + eval dashboard
-- [ ] Chunking/embedding comparison results published in this README
-- [ ] CI workflows live, deployed publicly
+- [ ] Frontend (chat window → citations → upload panel) — planned, after backend is solid
+- [ ] CI workflow — planned, after eval harness exists
 
 ## 👤 Author
 
