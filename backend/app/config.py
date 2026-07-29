@@ -18,9 +18,8 @@ class Settings(BaseSettings):
 
     # -- Retrieval ---
     retrieval_top_k: int = 5
-    bm25_weight: float = 0.5
-    ann_weight: float = 0.5
-
+    rrf_k: int = 60
+    
     # -- Chunking ---
     chunk_size: int = 400
     chunk_overlap: int = 70
