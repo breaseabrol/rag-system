@@ -44,7 +44,3 @@ class Chunk(Base):
             postgresql_ops={"embedding": "vector_cosine_ops"},
         ),
     )
-
-class IngestStatus(str, enum.Enum):
-    queued = "queued"
-    running = ""
