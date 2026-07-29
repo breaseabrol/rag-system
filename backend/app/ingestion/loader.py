@@ -98,7 +98,7 @@ def load_doc(url: str) -> LoadedDocument:
 def get_all_doc_urls(sections=("sql-", "functions-", "queries-", "performance-", "indexes-")) -> list[str]:
     toc_url = "https://www.postgresql.org/docs/16/index.html"
 
-    html = fetch_page(toc_url)
+    html, _ = fetch_page(toc_url)
     soup = BeautifulSoup(html, "html.parser")
 
     # Step 1: find the chapter "hub" pages by their link text, not their href —
