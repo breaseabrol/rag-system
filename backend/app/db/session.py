@@ -1,7 +1,11 @@
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
-DATABASE_URL = "postgresql://raguser:ragpass@localhost:5432/ragdb"
+from app.config import settings
 
-engine = create_engine(DATABASE_URL)
+engine = create_engine(
+    settings.database_url,
+    pool_size=settings.db_pool_size,
+    max_overflow=settings.db_max_overflow,
+)
 SessionLocal = sessionmaker(bind=engine)
