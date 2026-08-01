@@ -11,7 +11,8 @@ class Document(Base):
     id = Column(Integer, primary_key=True)
     url = Column(String, nullable=False, unique=True)
     title = Column(String)
-    raw_text = Column(JSON)
+    raw_text = Column(Text)
+    doc_metadata = Column(JSON)
 
     chunks = relationship("Chunk", back_populates="document")
 
