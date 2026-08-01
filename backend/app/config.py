@@ -13,7 +13,7 @@ class Settings(BaseSettings):
     embedding_dim: int = 384
 
     # --- LLM (Ollama, local) ---
-    ollama_base_url: str = "http://localhost:111434"
+    ollama_base_url: str = "http://localhost:11434"
     ollama_model: str = "llama3.1"
 
     # -- Retrieval ---
