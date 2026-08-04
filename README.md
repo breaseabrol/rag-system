@@ -137,7 +137,7 @@ python eval/run_eval.py
 - [X] `core/embeddings.py` — sentence-transformers wrapper
 - [X] `core/lexical_index.py` — BM25 index
 - [X] `db/vector_store.py` — pgvector ANN search
-- [ ] `db/models.py` — fix outstanding typo, finalize schema
+- [X] `db/models.py` — fix outstanding typo, finalize schema
 - [ ] `ingestion/loader.py` — fix known bug in `get_all_doc_urls`
 - [ ] `core/retrieval.py` — wire RRF fusion end to end
 - [ ] Sync ingestion pipeline + `POST /ingest` working end to end
