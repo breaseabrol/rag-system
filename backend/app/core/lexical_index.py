@@ -1,7 +1,7 @@
 from rank_bm25 import BM25Okapi
 
 class LexicalIndex:
-    def _init_(self):
+    def __init__(self):
         self._bm25: BM25Okapi | None = None
         self._chunk_ids: list[int] = []
 
@@ -20,4 +20,4 @@ class LexicalIndex:
         ranked = sorted(zip(self._chunk_ids, scores), key=lambda pair: pair[1], reverse=True)
         return ranked[:top_k]
 
-lexicalIndex = LexicalIndex()
+lexical_index = LexicalIndex()
