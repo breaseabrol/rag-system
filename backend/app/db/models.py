@@ -1,6 +1,4 @@
-import enum
 from sqlalchemy import Column, Integer, String, Text, ForeignKey, JSON, Index, Computed
-from sqlalchemy.dialects.postgresql import TSVECTOR
 from sqlalchemy.orm import declarative_base, relationship
 from pgvector.sqlalchemy import Vector
 
@@ -27,16 +25,9 @@ class Chunk(Base):
     # sentence-transformers all-MiniLM-L6-v2 -> 384 dims. Change if you pick a different model.
     embedding = Column(Vector(384))
 
-    # auto-generated lexical search column, kept in sync by Postgres itself
-    content_tsv = Column(
-        TSVECTOR,
-        Computed("to_tsvector('english', content)", persisted=True)
-    )
-
     document = relationship("Document", back_populates="chunks")
 
     __table_args__ = (
-        Index("ix_chunks_content_tsv", "content_tsv", postgresql_using="gin"),
         Index(
             "ix_chunks_embedding",
             "embedding",
