@@ -1,5 +1,5 @@
 """
-Integration tests for vector_store.py and lexical_index.py.
+Integration tests for vector_store.py, lexical_index.py, and retrieval.py.
 
 Requires:
   - docker-compose Postgres running (docker-compose up -d)
@@ -15,6 +15,7 @@ from app.db.session import SessionLocal
 from app.db.models import Document, Chunk
 from app.core.embeddings import embedder
 from app.core.lexical_index import lexical_index
+from app.core.retrieval import retrieve, reciprocal_rank_fusion
 from app.db.vector_store import similarity_search
 from typing import Generator
 
@@ -28,14 +29,14 @@ SAMPLE_CHUNKS = [
 
 
 @pytest.fixture(scope="module")
-def db() -> Generator[Session,None, None]:
+def db() -> Generator[Session, None, None]:
     session = SessionLocal()
     yield session
     session.close()
 
 
 @pytest.fixture(scope="module")
-def seeded_chunks(db: Session)-> Generator[list[tuple[int,str]],None, None]:
+def seeded_chunks(db: Session) -> Generator[list[tuple[int, str]], None, None]:
     """
     Inserts a throwaway Document + Chunks with real embeddings, yields
     (chunk_id, text) pairs, then cleans up after the test module finishes.
@@ -75,10 +76,8 @@ def test_vector_store_similarity_search(db, seeded_chunks):
     assert len(results) > 0
     result_ids = [chunk_id for chunk_id, _ in results]
     seeded_ids = {chunk_id for chunk_id, _ in seeded_chunks}
-    # at least one of our seeded chunks should show up in top results
     assert seeded_ids & set(result_ids)
 
-    # the Postgres chunk should rank above the unrelated "cat" chunk
     scores_by_id = dict(results)
     postgres_chunk_id = seeded_chunks[0][0]
     cat_chunk_id = seeded_chunks[1][0]
@@ -95,8 +94,6 @@ def test_lexical_index_search(seeded_chunks):
     top_chunk_id, top_score = results[0]
     postgres_chunk_id = seeded_chunks[0][0]
 
-    # the chunk containing "PostgreSQL" and "database" should rank first
-    # for a query containing those exact terms
     assert top_chunk_id == postgres_chunk_id
     assert top_score > 0
 
@@ -107,3 +104,38 @@ def test_lexical_index_raises_before_build():
     fresh_index = LexicalIndex()
     with pytest.raises(RuntimeError):
         fresh_index.search("anything")
+
+
+def test_reciprocal_rank_fusion_unit():
+    """
+    Pure unit test of the fusion math itself, no DB/model involved.
+    Chunk 1 ranks well in both lists -> should win.
+    Chunk 2 only appears in bm25 -> should still count, just lower.
+    Chunk 3 only appears in ann -> should still count, just lower.
+    """
+    bm25_results = [(1, 5.2), (2, 3.1)]
+    ann_results = [(1, 0.91), (3, 0.80)]
+
+    fused = reciprocal_rank_fusion(bm25_results, ann_results, k=60)
+    fused_ids = [chunk_id for chunk_id, _ in fused]
+
+    assert fused_ids[0] == 1
+    assert set(fused_ids) == {1, 2, 3}
+    assert fused[0][1] > fused[1][1]
+    assert fused[0][1] > fused[2][1]
+
+
+def test_retrieve_end_to_end(db, seeded_chunks):
+    """
+    Full pipeline: BM25 + ANN both hit real data, fused via RRF, returns
+    actual Chunk objects from the DB in fused order.
+    """
+    lexical_index.build(seeded_chunks)
+
+    results = retrieve(db, "Tell me about PostgreSQL databases", top_k=3)
+
+    assert len(results) > 0
+    assert len(results) <= 3
+
+    result_texts = [chunk.content for chunk in results]
+    assert any("PostgreSQL" in text for text in result_texts)
