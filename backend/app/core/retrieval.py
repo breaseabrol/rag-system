@@ -38,10 +38,6 @@ def _fetch_chunks_by_id(db: Session, chunk_ids: list[int]) -> list[Chunk]:
 
 
 def retrieve(db: Session, query: str, top_k: int | None = None) -> list[Chunk]:
-    """
-    Hybrid retrieval: runs BM25 and ANN search independently, fuses their
-    rankings via RRF, and returns the top_k Chunk objects in fused order.
-    """
     top_k = top_k or settings.retrieval_top_k
     candidate_pool = top_k * 3  # widen candidates before fusing
 
