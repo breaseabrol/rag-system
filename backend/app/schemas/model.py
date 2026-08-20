@@ -7,7 +7,7 @@ class IngestResponse(BaseModel):
     document_id:int
     url:str
     title:str
-    chunk_count:str
+    chunk_count:int
 
 class ChunkResult(BaseModel):
     chunk_id:int
