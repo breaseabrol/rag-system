@@ -9,3 +9,10 @@ engine = create_engine(
     max_overflow=settings.db_max_overflow,
 )
 SessionLocal = sessionmaker(bind=engine)
+
+def get_db():
+    db = SessionLocal
+    try:
+        yield db
+    finally:
+        db.close()
