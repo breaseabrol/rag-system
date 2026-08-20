@@ -12,7 +12,7 @@ class Document(Base):
     raw_text = Column(Text)
     doc_metadata = Column(JSON)
 
-    chunks = relationship("Chunk", back_populates="document")
+    chunks = relationship("Chunk", back_populates="document", order_by="Chunk.chunk_index")
 
 class Chunk(Base):
     __tablename__ = "chunks"
