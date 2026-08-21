@@ -1,0 +1,3 @@
+{"question": "How do I remove characters from the start and end of a string in PostgreSQL?", "expected_keywords": ["btrim", "trim"]}
+{"question": "What function checks if a string is Unicode normalized?", "expected_keywords": ["NORMALIZED", "Unicode"]}
+{"question": "What data types do PostgreSQL string functions operate on?", "expected_keywords": ["character", "text"]}
