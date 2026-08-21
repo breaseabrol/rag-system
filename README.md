@@ -1,12 +1,10 @@
 # Hybrid RAG Retrieval Backend
 
-A Retrieval-Augmented Generation backend built around one idea: **fuse lexical and semantic retrieval properly, run entirely locally, and keep the pipeline simple enough to actually finish and reason about end to end.**
-
-> **Status:** Active development (07/2026 – present). See [Current Status](#-current-status--roadmap) below for what's built vs. planned.
+A Retrieval-Augmented Generation backend built around one idea: **fuse lexical and semantic retrieval properly, run entirely locally, and keep the pipeline simple enough to actually finish, test, and reason about end to end.**
 
 ## 🎯 Why this architecture
 
-Earlier iterations of this project targeted a fully decoupled, queue-driven, multi-service architecture (async ingestion workers, swappable external embedding APIs, CI-gated eval regression). That scope was deliberately cut back — not because those ideas are wrong, but because a synchronous, single-process backend gets to a genuinely working, explainable system faster, without carrying infrastructure that isn't earning its keep yet. Three decisions drive the current design:
+Earlier iterations of this project targeted a fully decoupled, queue-driven, multi-service architecture (async ingestion workers, swappable external embedding APIs, CI-gated eval regression). That scope was deliberately cut back — not because those ideas are wrong, but because a synchronous, single-process backend gets to a genuinely working, explainable, *tested* system faster, without carrying infrastructure that isn't earning its keep yet. Three decisions drive the current design:
 
 1. **Hybrid retrieval, fused correctly.** BM25 (lexical) and pgvector ANN (semantic) search each surface results a single method would miss. They're combined via **Reciprocal Rank Fusion (RRF)** — rank-based, not a weighted sum of raw scores, since BM25 scores and cosine similarity live on incomparable scales.
 2. **Runs entirely locally.** Embeddings via `sentence-transformers`, generation via Ollama — no external API keys required to run this end to end.
@@ -15,7 +13,7 @@ Earlier iterations of this project targeted a fully decoupled, queue-driven, mul
 ## 🏗️ Architecture
 
 ```
-                    Client (curl / Postman)
+                    Client (curl / Postman / Swagger UI)
                               │
                      ┌────────▼────────┐
                      │   FastAPI app    │
@@ -37,18 +35,18 @@ Earlier iterations of this project targeted a fully decoupled, queue-driven, mul
             embedding column)     answer + citations
 ```
 
-**Why this shape works for now:** no queue, no worker process, no separate frontend — every request is a normal synchronous FastAPI call. That's a real tradeoff (ingesting a large document blocks the request until it's done), which is explicitly fine for a single-user, portfolio-scale corpus. The retrieval and generation logic underneath isn't a toy version of the idea — it's a real hybrid pipeline, just without the operational scaffolding a production deployment would need.
+No queue, no worker process, no separate frontend — every request is a normal synchronous FastAPI call. That's a real tradeoff (ingesting a document blocks the request until it's done), which is explicitly fine for a single-user, portfolio-scale corpus.
 
 ## 🛠️ Tech Stack
 
 | Layer | Choice | Why |
 |---|---|---|
-| API | FastAPI (Python) | Async-native, auto OpenAPI docs |
+| API | FastAPI (Python) | Async-native, auto OpenAPI docs at `/docs` |
 | Vector DB | PostgreSQL + pgvector (HNSW index) | Real SQL + ANN vector search in one database |
 | Lexical search | `rank_bm25` (BM25Okapi) | In-memory, no extra service to run |
 | Fusion | Reciprocal Rank Fusion | Rank-based combination avoids mixing incomparable BM25/cosine score scales |
-| Embeddings | `sentence-transformers` (`all-MiniLM-L6-v2`) | Local, no API key, 384-dim, fast enough on CPU |
-| LLM | Ollama (local) | No external API dependency, no per-token cost while iterating |
+| Embeddings | `sentence-transformers` (`all-MiniLM-L6-v2`) | Local, no API key, 384-dim |
+| LLM | Ollama (local, e.g. `llama3.2:3b`) | No external API dependency or per-token cost |
 | Chunking | Custom recursive, structure-aware | Keeps code blocks/tables atomic instead of splitting them |
 
 ## 📂 Repository Structure
@@ -57,97 +55,164 @@ Earlier iterations of this project targeted a fully decoupled, queue-driven, mul
 rag-system/
 ├── backend/
 │   ├── app/
-│   │   ├── main.py                  # FastAPI entrypoint
+│   │   ├── main.py                  # FastAPI entrypoint, startup hook rebuilds BM25 index
 │   │   ├── config.py                # Env-driven settings (pydantic-settings)
 │   │   ├── api/
-│   │   │   ├── routes_query.py
-│   │   │   └── routes_ingest.py
+│   │   │   ├── routes_query.py      # POST /query
+│   │   │   └── routes_ingest.py     # POST /ingest
 │   │   ├── core/
-│   │   │   ├── chunking.py          # Fixed-size + structure-aware recursive chunker
+│   │   │   ├── chunking.py          # Structure-aware recursive chunker
 │   │   │   ├── embeddings.py        # sentence-transformers wrapper
 │   │   │   ├── lexical_index.py     # In-memory BM25 index
-│   │   │   └── retrieval.py         # RRF fusion of BM25 + ANN
+│   │   │   ├── retrieval.py         # RRF fusion of BM25 + ANN
+│   │   │   └── generation.py        # Ollama call + grounded prompt
 │   │   ├── db/
-│   │   │   ├── models.py            # Document, Chunk (pgvector column, HNSW + GIN indexes)
+│   │   │   ├── models.py            # Document, Chunk (pgvector column, HNSW index)
 │   │   │   ├── session.py
 │   │   │   └── vector_store.py      # pgvector cosine ANN search
 │   │   ├── ingestion/
-│   │   │   └── loader.py            # HTML → clean text + segment tagging
+│   │   │   ├── loader.py            # HTML → clean text + segment tagging
+│   │   │   └── pipeline.py          # loader → chunker → embedder → DB → BM25 rebuild
 │   │   └── schemas/
-│   │       └── models.py            # Pydantic request/response models
+│   │       └── model.py             # Pydantic request/response models
 │   ├── eval/
 │   │   ├── build_eval_set.py
 │   │   ├── run_eval.py
-│   │   ├── metrics.py
+│   │   ├── metrics.py               # hit@k, precision@k, recall@k, MRR, refusal detection
 │   │   └── eval_dataset.jsonl
 │   ├── tests/
+│   │   └── test_retrieval.py        # Integration tests against real Postgres + BM25
 │   ├── scripts/
-│   │   └── init_db.py
-│   ├── requirements.txt
-│   └── Dockerfile
+│   │   ├── init_db.py
+│   │   └── smoke_test_ingest.py
+│   └── requirements.txt
 ├── docker-compose.yml                 # Postgres+pgvector
 └── README.md
 ```
 
-## 🚀 Quick Start
+## 🚀 Getting Started
+
+### Prerequisites
+
+- Python 3.10+
+- Docker (for Postgres/pgvector)
+- [Ollama](https://ollama.com/download) — installed and running locally
+
+### Setup
 
 ```bash
 git clone https://github.com/breaseabrol/rag-system.git
 cd rag-system
 
-# Spin up Postgres + pgvector
+# 1. Start Postgres + pgvector
 docker-compose up -d
 
-# Install dependencies
+# 2. Enable the pgvector extension (one-time, per fresh volume)
+docker-compose exec postgres-db psql -U raguser -d ragdb -c "CREATE EXTENSION IF NOT EXISTS vector;"
+
+# 3. Install Python dependencies
 cd backend
+python -m venv .venv
+.venv\Scripts\Activate.ps1        # Windows PowerShell
+# source .venv/bin/activate       # macOS/Linux
+
 pip install -r requirements.txt
 
-# Create tables
+# 4. Create tables
 python scripts/init_db.py
 
-# Run the API
+# 5. Pull a local model
+ollama pull llama3.2:3b
+# (update OLLAMA_MODEL in .env or config.py if you use a different model)
+
+# 6. Run the API
 uvicorn app.main:app --reload
 ```
 
-Requires [Ollama](https://ollama.ai) running locally with a model pulled (e.g. `ollama pull llama3.1`) for the generation step.
+Visit `http://localhost:8000/docs` for the interactive API — ingest a page via `POST /ingest`, then ask questions about it via `POST /query`.
 
-*(`.env.example` to be added — confirm required vars against `config.py`.)*
+> ⚠️ **Windows PowerShell note:** the built-in `curl` alias is not real curl and mishandles `-H`/`-d` flags. Use `curl.exe` explicitly, `Invoke-RestMethod`, or just use the `/docs` UI — far less friction while iterating.
+
+### Running tests
+
+```bash
+pytest tests/test_retrieval.py -v
+```
+
+Integration tests, not mocks — they exercise BM25, pgvector ANN, and RRF fusion against a real, temporarily-seeded Postgres database.
 
 ### Running an evaluation
 
 ```bash
-python eval/run_eval.py
+python -m eval.run_eval
 ```
 
-## 📊 Evaluation Methodology
+## 📊 Evaluation
 
-*(To be filled in once the eval harness is built — retrieval precision/recall@k and answer faithfulness against a committed QA set in `eval_dataset.jsonl`.)*
+A 10-question eval set was run against a single ingested page ([PostgreSQL string functions docs](https://www.postgresql.org/docs/16/functions-string.html)), measuring retrieval quality (Hit@k, Precision@k, Recall@k, MRR) separately from answer quality.
+
+| Metric | Result |
+|---|---|
+| Hit@3 | 80% |
+| Hit@5 | 90% |
+| Recall@5 | 82% |
+| MRR | 0.70 |
+| Answer keyword score | 90% |
+
+**This eval set is small (10 questions, 1 document) and the answer-scoring method (keyword matching) has known limitations — both described honestly below, not smoothed over.**
+
+### A finding worth calling out specifically
+
+One question ("what function converts a string to lowercase?") scored a misleadingly perfect answer score despite a real, meaningful failure:
+
+- **Retrieval missed the correct chunk entirely** (Hit@5: 0%).
+- Instead of declining to answer, the model **inferred a guess from a different function it had actually retrieved** (`upper()`), reasoning by name pattern rather than by grounded evidence — and got it right by luck, not by design.
+- The keyword-based scorer gave this a perfect score, because the substring `"lower"` appears inside the word `"lowercase"` in the model's own sentence explaining that it *couldn't* find the answer. A false positive caused by naive substring matching, not evidence of a correct, grounded answer.
+
+This is the most important thing this eval run surfaced: **retrieval failure and generation hallucination can combine to look like success on a shallow metric.** A separate question, correctly labeled as unanswerable from the ingested corpus, *did* get a correctly refused answer — showing the grounding instruction works when retrieval and generation are both functioning; this case shows what happens when retrieval quietly fails first.
+
+**Mitigations identified, not yet implemented (see [Roadmap](#-current-status--roadmap)):**
+- Word-boundary matching instead of substring matching in eval scoring (or LLM-as-judge scoring)
+- A stronger grounding instruction explicitly forbidding inference from function naming patterns
+- A retrieval-confidence gate: if RRF fusion scores fall below a threshold, return an explicit "not confident enough to answer" response rather than passing weak context to generation at all
 
 ## ⚖️ Tradeoffs
 
-- **Synchronous ingestion, no queue**: simpler to build and reason about; means `/ingest` blocks until a document is fully processed. Fine for single-user, small-corpus use — would need an async worker if ingesting many large documents concurrently.
-- **RRF over weighted score fusion**: BM25 and cosine similarity scores aren't on comparable scales, so combining them by rank position avoids an arbitrary, hard-to-justify weighting scheme.
-- **Local models over hosted APIs**: no external cost or API key management while iterating, at the cost of generation/embedding quality relative to larger hosted models.
-- **What's deliberately not built (yet)**: no frontend, no async ingestion, no CI, no observability dashboard. These are staged for later — see roadmap below — not abandoned.
+- **Synchronous ingestion, no queue** — simpler to build and reason about; `/ingest` blocks until a document is fully processed. Fine for single-user, small-corpus use.
+- **RRF over weighted score fusion** — BM25 and cosine similarity scores aren't on comparable scales, so combining them by rank position avoids an arbitrary, hard-to-justify weighting scheme.
+- **Local models over hosted APIs** — no external cost or API key management, at some quality cost relative to larger hosted models (especially with a 3B-parameter local model).
+- **Keyword-based eval scoring** — cheap and transparent, but can produce both false negatives (correct answers using different valid terminology) and false positives (substring matches inside unrelated words) — see the finding above.
+- **No defense against indirect prompt injection** in ingested content — `POST /ingest` accepts any URL with no allowlist, and scraped content is passed into the LLM prompt without sanitization. Low realistic risk currently (only official PostgreSQL docs have been ingested), but a real gap if this were ever exposed beyond local use.
+- **What's deliberately not built (yet)**: no frontend, no async ingestion, no CI, no auth, no observability dashboard.
+
+## 🤖 Development Process
+
+This project was built collaboratively with Claude (Anthropic), used as a pair-programming and design-review tool throughout — not as a black box that wrote the whole thing unsupervised.
+
+**How AI was used:**
+- Drafting initial implementations of individual functions/files, which were then read, tested, and debugged independently
+- Architectural discussion — evaluating a fully async, queue-driven design against a simpler synchronous one, and choosing the latter for a buildable, testable scope without sacrificing the retrieval logic that actually matters
+- Explaining trade-offs that were then defended or challenged — e.g. why Reciprocal Rank Fusion over a weighted sum of BM25/cosine scores
+
+**What was done independently:**
+- Every bug in this repo was diagnosed and fixed by reading the actual error/traceback — including a mistyped `__init__`, a FastAPI `response_model` pointing at the wrong schema, a missing pgvector extension after a volume reset, a stale schema after a model change, and the eval-scoring false-positive documented above
+- All testing against a real local Postgres/pgvector instance and live Ollama calls
+- The decision to cut scope from the original async/multi-service design when it added complexity the project didn't need
 
 ## ✅ Current Status & Roadmap
 
-- [X] `config.py` — env-driven settings
-- [X] `db/session.py` — connection pooling wired to config
-- [X] `core/embeddings.py` — sentence-transformers wrapper
-- [X] `core/lexical_index.py` — BM25 index
-- [X] `db/vector_store.py` — pgvector ANN search
-- [X] `db/models.py` — fix outstanding typo, finalize schema
-- [ ] `ingestion/loader.py` — fix known bug in `get_all_doc_urls`
-- [ ] `core/retrieval.py` — wire RRF fusion end to end
-- [ ] Sync ingestion pipeline + `POST /ingest` working end to end
-- [ ] `core/generation.py` (Ollama) + `POST /query` working end to end
-- [ ] Eval set built + first real eval numbers produced
-- [ ] Frontend (chat window → citations → upload panel) — planned, after backend is solid
-- [ ] CI workflow — planned, after eval harness exists
+- [X] Hybrid retrieval (BM25 + pgvector ANN + RRF fusion), tested end to end
+- [X] Structure-aware ingestion pipeline, tested against real pages
+- [X] `POST /ingest` and `POST /query`, tested live
+- [X] Eval harness with Hit@k / Precision@k / Recall@k / MRR + refusal detection
+- [ ] Fix eval scoring false positive (word-boundary matching or LLM-as-judge)
+- [ ] Retrieval-confidence gate before generation
+- [ ] Stronger anti-hallucination grounding instruction
+- [ ] Expand eval set beyond 10 questions / 1 document
+- [ ] Frontend (chat window → citations → upload panel)
+- [ ] CI workflow, once eval harness is more mature
 
 ## 👤 Author
 
 **Branden Rease Abrol**
 - GitHub: [@breaseabrol](https://github.com/breaseabrol)
-- LinkedIn: [breaseabrol](https://linkedin.com/in/breaseabrol)
