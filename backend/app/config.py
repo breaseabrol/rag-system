@@ -14,7 +14,7 @@ class Settings(BaseSettings):
 
     # --- LLM (Ollama, local) ---
     ollama_base_url: str = "http://localhost:11434"
-    ollama_model: str = "llama3.1"
+    ollama_model: str = "llama3.2:3b"
 
     # -- Retrieval ---
     retrieval_top_k: int = 5

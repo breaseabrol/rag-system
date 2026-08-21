@@ -1,3 +1,10 @@
-{"question": "How do I remove characters from the start and end of a string in PostgreSQL?", "expected_keywords": ["btrim", "trim"]}
-{"question": "What function checks if a string is Unicode normalized?", "expected_keywords": ["NORMALIZED", "Unicode"]}
-{"question": "What data types do PostgreSQL string functions operate on?", "expected_keywords": ["character", "text"]}
+{"question": "How do I remove characters from the start and end of a string in PostgreSQL?", "relevant_content_match": "btrim ("}
+{"question": "What function checks if a string is Unicode normalized?", "relevant_content_match": "NORMALIZED"}
+{"question": "What data types do PostgreSQL string functions operate on?", "relevant_content_match": "character varying"}
+{"question": "How do I concatenate multiple strings together in PostgreSQL?", "relevant_content_match": "concat ("}
+{"question": "What function converts a string to lowercase?", "relevant_content_match": "lower ("}
+{"question": "What function converts a string to uppercase?", "relevant_content_match": "upper ("}
+{"question": "How do I get the length of a string in PostgreSQL?", "relevant_content_match": "length ("}
+{"question": "How do I extract a substring from a string in PostgreSQL?", "relevant_content_match": "substring ("}
+{"question": "How do I replace occurrences of a substring within a string?", "relevant_content_match": "replace ("}
+{"question": "What is the syntax for connecting to a PostgreSQL database using psql?", "relevant_content_match": null, "expected_keywords": ["UNANSWERABLE"]}
